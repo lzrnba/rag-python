@@ -9,6 +9,8 @@ from api.routes import chat, health, documents
 from agents.graph import create_agent_graph
 from agents.nodes import set_retriever, set_llm_client
 from retrieval.hybrid import HybridRetriever
+from retrieval.embedder import OllamaEmbedder
+from retrieval.loader import DocumentLoader
 from llm.vllm_client import QwenClient
 
 # 初始化日志
@@ -41,6 +43,19 @@ async def lifespan(app: FastAPI):
             logger.warning(f"LLM service not reachable at {settings.LLM_BASE_URL}")
             logger.warning("Grader/Rewriter/Generator will fail until LLM is available")
         
+        # 初始化 Embedder
+        embedder = None
+        try:
+            embedder = OllamaEmbedder()
+            if embedder.health_check():
+                logger.info(f"Embedding service online: {settings.EMBEDDING_MODEL}")
+            else:
+                logger.warning("Embedding service not available, vector search disabled")
+                embedder = None
+        except Exception as e:
+            logger.warning(f"Embedder init failed: {e}, vector search disabled")
+            embedder = None
+
         # 初始化检索器
         global retriever
         retriever = HybridRetriever(
@@ -48,31 +63,28 @@ async def lifespan(app: FastAPI):
             bm25_weight=settings.BM25_WEIGHT,
             k=settings.TOP_K
         )
-        
-        # 从 data/documents/ 目录加载文档，没有则用示例文档
+
+        # 从 data/documents/ 目录加载文档
         import os
         docs_dir = os.path.join(os.path.dirname(__file__), "data", "documents")
+        loader = DocumentLoader()
         sample_docs = []
-        
+
         if os.path.exists(docs_dir):
             for fname in sorted(os.listdir(docs_dir)):
                 fpath = os.path.join(docs_dir, fname)
-                if fname.endswith((".txt", ".md")):
+                if not os.path.isfile(fpath):
+                    continue
+                if fname.endswith((".txt", ".md", ".pdf", ".docx")):
                     try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            content = f.read().strip()
-                        if content:
-                            sample_docs.append({
-                                "doc_id": fname,
-                                "content": content,
-                                "metadata": {"section_path": fname, "source": fpath}
-                            })
-                            logger.info(f"Loaded: {fname} ({len(content)} chars)")
+                        file_chunks = loader.load_file(fpath)
+                        sample_docs.extend(file_chunks)
+                        logger.info(f"Loaded: {fname} ({len(file_chunks)} chunks)")
                     except Exception as e:
                         logger.warning(f"Failed to load {fname}: {e}")
-        
+
         if not sample_docs:
-            logger.info("No user docs in data/documents/, using built-in sample docs")
+            logger.info("No user docs found, using built-in sample docs")
             sample_docs = [
                 {
                     "doc_id": "doc_001",
@@ -90,9 +102,12 @@ async def lifespan(app: FastAPI):
                     "metadata": {"section_path": "第 3 章 → 用户模块 → AuthResult"}
                 }
             ]
-        
-        retriever.initialize(sample_docs)
-        logger.info(f"Retriever initialized with {len(sample_docs)} documents")
+
+        retriever.initialize(sample_docs, embedder=embedder)
+        logger.info(f"Retriever initialized with {len(sample_docs)} chunks")
+
+        # 将 embedder 存储到 documents 路由
+        documents.set_embedder(embedder)
         
         # 设置全局实例
         set_retriever(retriever)

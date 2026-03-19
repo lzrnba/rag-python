@@ -177,11 +177,11 @@ def generate_cot_answer_node(state: AgentState) -> AgentState:
     功能：
     - 基于确认的上下文生成回答
     - 使用思维链（CoT）显式输出推理步骤
+    - 结合对话历史实现多轮对话
     """
     try:
         if _llm_client is None:
             logger.warning("LLM client not initialized, returning retrieved documents as answer")
-            # LLM 不可用时直接返回检索到的文档内容
             docs = state.get("documents", [])
             if docs:
                 content = "\n\n".join([
@@ -193,7 +193,6 @@ def generate_cot_answer_node(state: AgentState) -> AgentState:
                 state["answer"] = "未找到相关文档内容。"
             state["reasoning"] = None
             state["sources"] = [doc.get("metadata", {}).get("section_path", "") for doc in docs]
-            # 有文档时置信度基于文档数量，无文档时为 0
             state["confidence"] = min(0.5 + len(docs) * 0.1, 0.8) if docs else 0.0
             return state
         
@@ -203,16 +202,29 @@ def generate_cot_answer_node(state: AgentState) -> AgentState:
         ])
         
         if not context.strip():
-            state["answer"] = "未找到相关信息"
-            state["reasoning"] = None
-            state["sources"] = []
-            state["confidence"] = 0.0
-            return state
+            # 文档为空，但如果有历史对话，仍然尝试用历史回答
+            chat_history = state.get("chat_history", "")
+            if not chat_history.strip():
+                state["answer"] = "未找到相关信息"
+                state["reasoning"] = None
+                state["sources"] = []
+                state["confidence"] = 0.0
+                return state
+            # 有历史，用空文档+历史继续生成
+            context = "（无相关文档，请根据对话历史回答）"
+        
+        # 构建历史段落
+        from llm.prompts import HISTORY_SECTION_TEMPLATE
+        chat_history = state.get("chat_history", "")
+        history_section = ""
+        if chat_history.strip():
+            history_section = HISTORY_SECTION_TEMPLATE.format(history=chat_history)
         
         # 构建 Prompt
         prompt = GENERATOR_PROMPT.format(
             context=context,
-            query=state["original_query"]
+            query=state["original_query"],
+            history_section=history_section
         )
         
         # 调用 LLM
@@ -242,10 +254,8 @@ def generate_cot_answer_node(state: AgentState) -> AgentState:
         ]
         
         # 计算置信度
-        # - 有 LLM 生成的回答：基础置信度 0.6，文档数量加成
-        # - sufficiency_score 仅作为参考，权重降低
-        doc_count_factor = min(len(state["documents"]) / 3, 1.0)  # 3 篇文档即满分
-        base = 0.6  # 有 LLM 回答的基础置信度
+        doc_count_factor = min(len(state["documents"]) / 3, 1.0)
+        base = 0.6
         sufficiency_bonus = state["sufficiency_score"] * 0.2
         doc_bonus = doc_count_factor * 0.2
         state["confidence"] = min(base + sufficiency_bonus + doc_bonus, 1.0)

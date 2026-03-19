@@ -31,6 +31,10 @@ class AgentState(TypedDict):
     sources: List[str]
     confidence: float
 
+    # 对话历史
+    chat_history: str        # 格式化的历史文本，注入 Prompt 用
+    skip_retrieval: bool     # 记忆命中时跳过检索直接生成
+
     # 元数据
     start_time: float
     retrieval_times: List[float]

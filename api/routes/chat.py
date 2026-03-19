@@ -6,6 +6,7 @@ import time
 from loguru import logger
 from agents.graph import create_agent_graph
 from agents.state import AgentState
+from memory.conversation import memory
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -28,11 +29,28 @@ class ChatResponse(BaseModel):
 # 全局 RAG 图实例
 rag_graph = None
 
-def initialize_graph():
-    """初始化 RAG 图"""
-    global rag_graph
-    rag_graph = create_agent_graph()
-    logger.info("RAG graph initialized")
+@router.delete("/chat/history/{conversation_id}")
+async def clear_history(conversation_id: str):
+    """清除指定会话的对话历史"""
+    memory.clear(conversation_id)
+    return {"success": True, "message": f"会话 {conversation_id} 的历史已清除"}
+
+
+@router.get("/chat/history/{conversation_id}")
+async def get_history(conversation_id: str):
+    """获取指定会话的对话历史"""
+    messages = memory.get_history(conversation_id)
+    return {
+        "conversation_id": conversation_id,
+        "messages": messages,
+        "total_turns": len(messages) // 2
+    }
+
+
+@router.get("/chat/memory/stats")
+async def memory_stats():
+    """获取对话记忆统计信息"""
+    return memory.stats()
 
 @router.post("/chat/completions", response_model=ChatResponse)
 async def chat_completion(request: ChatRequest):
@@ -50,7 +68,7 @@ async def chat_completion(request: ChatRequest):
     start_time = time.time()
     
     try:
-        # 生成会话 ID
+        # 生成会话 ID（必须在获取历史之前）
         conversation_id = request.conversation_id or str(uuid.uuid4())
         
         # 获取选项
@@ -58,6 +76,10 @@ async def chat_completion(request: ChatRequest):
         max_iterations = options.get("max_iterations", 3)
         top_k = options.get("top_k", 5)
         
+        # 获取对话历史
+        chat_history = memory.get_history_text(conversation_id, max_turns=3)
+        logger.info(f"Memory lookup: conv={conversation_id}, history_len={len(chat_history)}, history='{chat_history[:100] if chat_history else 'EMPTY'}'")        
+
         # 构建初始状态
         initial_state: AgentState = {
             "query": request.query,
@@ -79,7 +101,9 @@ async def chat_completion(request: ChatRequest):
             "start_time": start_time,
             "retrieval_times": [],
             "error": None,
-            "top_k": top_k
+            "top_k": top_k,
+            "chat_history": chat_history,
+            "skip_retrieval": False
         }
         
         # 调用 RAG 图
@@ -91,6 +115,13 @@ async def chat_completion(request: ChatRequest):
             logger.error(f"RAG pipeline error: {result['error']}")
             raise HTTPException(status_code=500, detail=result["error"])
         
+        # 保存本轮对话到记忆
+        memory.add_turn(
+            conversation_id=conversation_id,
+            query=request.query,
+            answer=result["answer"]
+        )
+
         # 计算响应时间
         response_time_ms = int((time.time() - start_time) * 1000)
         
