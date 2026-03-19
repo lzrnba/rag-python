@@ -38,6 +38,7 @@ def retrieve_and_rerank_node(state: AgentState) -> AgentState:
         if _retriever is None:
             logger.error("Retriever not initialized")
             state["error"] = "Retriever not initialized"
+            state["top_doc_score"] = 0.0
             return state
         
         # 执行混合检索
@@ -48,18 +49,25 @@ def retrieve_and_rerank_node(state: AgentState) -> AgentState:
         state["document_scores"] = [doc.get("final_score", 0.0) for doc in documents]
         state["iterations"] += 1
         
+        # 记录最高文档分数（用于后续评分路由）
+        if documents:
+            state["top_doc_score"] = max(doc.get("final_score", 0.0) for doc in documents)
+        else:
+            state["top_doc_score"] = 0.0
+        
         # 记录检索耗时
         elapsed = time.time() - start_time
         state["retrieval_times"].append(elapsed)
         
         logger.info(
             f"Retrieval completed: query='{query}', "
-            f"documents={len(documents)}, time={elapsed:.2f}s"
+            f"documents={len(documents)}, top_score={state['top_doc_score']:.3f}, time={elapsed:.2f}s"
         )
         
     except Exception as e:
         logger.error(f"Retrieval failed: {e}")
         state["error"] = str(e)
+        state["top_doc_score"] = 0.0
     
     return state
 

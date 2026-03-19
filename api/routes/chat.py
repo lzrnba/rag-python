@@ -103,7 +103,8 @@ async def chat_completion(request: ChatRequest):
             "error": None,
             "top_k": top_k,
             "chat_history": chat_history,
-            "skip_retrieval": False
+            "skip_retrieval": False,
+            "top_doc_score": 0.0
         }
         
         # 调用 RAG 图

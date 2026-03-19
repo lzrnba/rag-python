@@ -31,9 +31,12 @@ class AgentState(TypedDict):
     sources: List[str]
     confidence: float
 
+    # 检索评分路由
+    top_doc_score: float     # 检索到的最高文档分数，用于评分路由
+    skip_retrieval: bool     # 记忆命中时跳过检索直接生成
+
     # 对话历史
     chat_history: str        # 格式化的历史文本，注入 Prompt 用
-    skip_retrieval: bool     # 记忆命中时跳过检索直接生成
 
     # 元数据
     start_time: float

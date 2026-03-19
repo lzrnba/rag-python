@@ -2,6 +2,7 @@
 import json
 from typing import List, Dict
 from loguru import logger
+from core.config import settings
 
 
 class ConversationMemory:
@@ -13,10 +14,10 @@ class ConversationMemory:
         self,
         max_turns: int = 10,
         max_age_seconds: int = 86400,
-        redis_host: str = "lzrwebsite.icu",
-        redis_port: int = 6379,
-        redis_password: str = "1911lzrnb",
-        redis_db: int = 0,
+        redis_host: str = None,
+        redis_port: int = None,
+        redis_password: str = None,
+        redis_db: int = None,
         key_prefix: str = "rag:conv:"
     ):
         self.max_turns = max_turns
@@ -25,20 +26,26 @@ class ConversationMemory:
         self._redis = None
         self._fallback: Dict[str, list] = {}
 
+        # 从 settings 读取默认值
+        host = redis_host or settings.REDIS_HOST
+        port = redis_port or settings.REDIS_PORT
+        password = redis_password or settings.REDIS_PASSWORD
+        db = redis_db if redis_db is not None else settings.REDIS_DB
+
         try:
             import redis
             client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                password=redis_password,
-                db=redis_db,
+                host=host,
+                port=port,
+                password=password or None,
+                db=db,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5
             )
             client.ping()
             self._redis = client
-            logger.info(f"Redis connected: {redis_host}:{redis_port}")
+            logger.info(f"Redis connected: {host}:{port}")
         except Exception as e:
             logger.warning(f"Redis unavailable ({e}), using in-memory fallback")
             self._redis = None
@@ -126,12 +133,5 @@ class ConversationMemory:
         }
 
 
-# 全局单例
-memory = ConversationMemory(
-    max_turns=10,
-    max_age_seconds=86400,
-    redis_host="lzrwebsite.icu",
-    redis_port=6379,
-    redis_password="1911lzrnb",
-    redis_db=0
-)
+# 全局单例（参数从 .env / settings 自动读取）
+memory = ConversationMemory(max_turns=10, max_age_seconds=86400)
