@@ -120,5 +120,5 @@ async def chat_completion(request: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Chat completion failed: {e}", exc_info=True)
+        logger.error("Chat completion failed: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

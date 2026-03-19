@@ -74,8 +74,10 @@ def grade_evidence_node(state: AgentState) -> AgentState:
     """
     try:
         if _llm_client is None:
-            logger.error("LLM client not initialized")
-            state["error"] = "LLM client not initialized"
+            logger.warning("LLM client not initialized, forcing sufficient to avoid infinite loop")
+            state["is_sufficient"] = True
+            state["sufficiency_score"] = 1.0
+            state["missing_info"] = ""
             return state
         
         # 构建上下文
@@ -139,8 +141,8 @@ def rewrite_query_node(state: AgentState) -> AgentState:
     """
     try:
         if _llm_client is None:
-            logger.error("LLM client not initialized")
-            state["error"] = "LLM client not initialized"
+            logger.warning("LLM client not initialized, keeping original query")
+            # LLM 不可用时保持原始查询不变，避免死循环
             return state
         
         prompt = REWRITER_PROMPT.format(
@@ -178,8 +180,21 @@ def generate_cot_answer_node(state: AgentState) -> AgentState:
     """
     try:
         if _llm_client is None:
-            logger.error("LLM client not initialized")
-            state["error"] = "LLM client not initialized"
+            logger.warning("LLM client not initialized, returning retrieved documents as answer")
+            # LLM 不可用时直接返回检索到的文档内容
+            docs = state.get("documents", [])
+            if docs:
+                content = "\n\n".join([
+                    f"[{doc.get('metadata', {}).get('section_path', doc.get('doc_id', ''))}]\n{doc.get('content', '')}"
+                    for doc in docs
+                ])
+                state["answer"] = f"根据文档检索到以下相关内容：\n\n{content}"
+            else:
+                state["answer"] = "未找到相关文档内容。"
+            state["reasoning"] = None
+            state["sources"] = [doc.get("metadata", {}).get("section_path", "") for doc in docs]
+            # 有文档时置信度基于文档数量，无文档时为 0
+            state["confidence"] = min(0.5 + len(docs) * 0.1, 0.8) if docs else 0.0
             return state
         
         # 构建上下文
@@ -226,9 +241,14 @@ def generate_cot_answer_node(state: AgentState) -> AgentState:
             for doc in state["documents"]
         ]
         
-        # 计算置信度（基于充分性分数和文档数量）
-        doc_count_factor = min(len(state["documents"]) / 5, 1.0)
-        state["confidence"] = state["sufficiency_score"] * 0.7 + doc_count_factor * 0.3
+        # 计算置信度
+        # - 有 LLM 生成的回答：基础置信度 0.6，文档数量加成
+        # - sufficiency_score 仅作为参考，权重降低
+        doc_count_factor = min(len(state["documents"]) / 3, 1.0)  # 3 篇文档即满分
+        base = 0.6  # 有 LLM 回答的基础置信度
+        sufficiency_bonus = state["sufficiency_score"] * 0.2
+        doc_bonus = doc_count_factor * 0.2
+        state["confidence"] = min(base + sufficiency_bonus + doc_bonus, 1.0)
         
         logger.info(
             f"Answer generated: confidence={state['confidence']:.2f}, "
