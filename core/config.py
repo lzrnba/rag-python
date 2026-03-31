@@ -1,8 +1,11 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
+from pathlib import Path
 
 class Settings(BaseSettings):
     """系统配置"""
+
+    _project_root: Path = Path(__file__).resolve().parent.parent
     
     # 服务配置
     HOST: str = "0.0.0.0"
@@ -20,9 +23,22 @@ class Settings(BaseSettings):
     
     # Reranker 配置
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    RERANK_ENABLED: bool = True
+    RERANK_CANDIDATES: int = 20
     
-    # 向量库配置
+    # 向量库 / 文档目录配置
     VECTOR_STORE_PATH: str = "data/vectorstore"
+    DOCUMENTS_DIR: str = "data/documents"
+
+    @property
+    def VECTOR_STORE_PATH_RESOLVED(self) -> str:
+        p = Path(self.VECTOR_STORE_PATH)
+        return str(p if p.is_absolute() else (self._project_root / p).resolve())
+
+    @property
+    def DOCUMENTS_DIR_RESOLVED(self) -> str:
+        p = Path(self.DOCUMENTS_DIR)
+        return str(p if p.is_absolute() else (self._project_root / p).resolve())
     
     # RAG 配置
     MAX_ITERATIONS: int = 3

@@ -35,7 +35,7 @@ class QwenClient:
         stop: Optional[List[str]] = None
     ) -> str:
         """
-        生成文本（兼容 Ollama OpenAI 格式）
+        生成文本（非流式，兼容 Ollama OpenAI 格式）
         """
         payload = {
             "model": self.model,
@@ -47,8 +47,6 @@ class QwenClient:
             "top_p": top_p,
             "stream": False
         }
-
-        # Ollama 不支持空 stop 列表，只在有值时传入
         if stop:
             payload["stop"] = stop
 
@@ -57,7 +55,7 @@ class QwenClient:
             response = self.session.post(
                 f"{self.base_url}/chat/completions",
                 json=payload,
-                timeout=120  # Ollama 首次加载模型可能较慢
+                timeout=120
             )
             response.raise_for_status()
             result = response.json()
@@ -73,6 +71,66 @@ class QwenClient:
             raise
         except requests.exceptions.RequestException as e:
             logger.error(f"LLM request failed: {e}")
+            raise
+
+    def stream_generate(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        top_p: float = 0.95,
+        stop: Optional[List[str]] = None
+    ):
+        """
+        流式生成文本，逐 token yield 字符串
+        """
+        import json as _json
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": True
+        }
+        if stop:
+            payload["stop"] = stop
+
+        try:
+            logger.debug(f"Streaming LLM: model={self.model}")
+            with self.session.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                timeout=120,
+                stream=True
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    # SSE 格式："data: {...}" 或 "data: [DONE]"
+                    text = line.decode("utf-8") if isinstance(line, bytes) else line
+                    if not text.startswith("data:"):
+                        continue
+                    data_str = text[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = _json.loads(data_str)
+                        delta = chunk["choices"][0].get("delta", {})
+                        token = delta.get("content", "")
+                        if token:
+                            yield token
+                    except (_json.JSONDecodeError, KeyError, IndexError):
+                        continue
+        except requests.exceptions.ConnectionError:
+            logger.error(f"Cannot connect to LLM service at {self.base_url}")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"LLM stream request failed: {e}")
             raise
 
     def embed(self, texts: List[str]) -> List[List[float]]:

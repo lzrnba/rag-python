@@ -61,21 +61,38 @@ async def lifespan(app: FastAPI):
         retriever = HybridRetriever(
             vector_weight=settings.VECTOR_WEIGHT,
             bm25_weight=settings.BM25_WEIGHT,
-            k=settings.TOP_K
+            k=settings.TOP_K,
+            store_path=settings.VECTOR_STORE_PATH_RESOLVED
         )
 
-        # 从 data/documents/ 目录加载文档
+        # 从可配置目录加载文档
         import os
-        docs_dir = os.path.join(os.path.dirname(__file__), "data", "documents")
+        docs_dir = settings.DOCUMENTS_DIR_RESOLVED
+        docs_dir_abs = docs_dir
         loader = DocumentLoader()
         sample_docs = []
+
+        supported_ext = (".txt", ".md", ".pdf", ".docx")
+        if os.path.exists(docs_dir):
+            supported_files = [
+                f for f in os.listdir(docs_dir)
+                if os.path.isfile(os.path.join(docs_dir, f)) and f.endswith(supported_ext)
+            ]
+            logger.info(
+                f"Documents dir: configured='{docs_dir}', absolute='{docs_dir_abs}', "
+                f"exists=True, supported_files={len(supported_files)}"
+            )
+        else:
+            logger.warning(
+                f"Documents dir: configured='{docs_dir}', absolute='{docs_dir_abs}', exists=False"
+            )
 
         if os.path.exists(docs_dir):
             for fname in sorted(os.listdir(docs_dir)):
                 fpath = os.path.join(docs_dir, fname)
                 if not os.path.isfile(fpath):
                     continue
-                if fname.endswith((".txt", ".md", ".pdf", ".docx")):
+                if fname.endswith(supported_ext):
                     try:
                         file_chunks = loader.load_file(fpath)
                         sample_docs.extend(file_chunks)

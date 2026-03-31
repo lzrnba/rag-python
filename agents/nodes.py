@@ -50,10 +50,18 @@ def retrieve_and_rerank_node(state: AgentState) -> AgentState:
         state["iterations"] += 1
         
         # 记录最高文档分数（用于后续评分路由）
+        scores = [doc.get("final_score", 0.0) for doc in documents]
         if documents:
-            state["top_doc_score"] = max(doc.get("final_score", 0.0) for doc in documents)
+            state["top_doc_score"] = max(scores)
+            sorted_scores = sorted(scores, reverse=True)
+            score_gap = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else sorted_scores[0]
+            avg_topk = sum(sorted_scores[: min(3, len(sorted_scores))]) / min(3, len(sorted_scores))
+            # Retrieval Confidence: 结合最高分、top-k 分布、首位优势
+            retrieval_conf = 0.5 * state["top_doc_score"] + 0.3 * avg_topk + 0.2 * max(score_gap, 0.0)
+            state["retrieval_confidence"] = max(0.0, min(retrieval_conf, 1.0))
         else:
             state["top_doc_score"] = 0.0
+            state["retrieval_confidence"] = 0.0
         
         # 记录检索耗时
         elapsed = time.time() - start_time
@@ -178,6 +186,29 @@ def rewrite_query_node(state: AgentState) -> AgentState:
     return state
 
 
+def generate_fallback_answer_node(state: AgentState) -> AgentState:
+    """
+    非文档命中场景：直接返回模型回答，不走多轮检索评分
+    并明确标识文档内未记录相关知识。
+    """
+def generate_fallback_answer_node(state: AgentState) -> AgentState:
+    """
+    非文档命中场景：直接返回简洁的"知识库未收录"提示，不调用 LLM。
+    """
+    query = state.get("original_query", "")
+    state["answer"] = f"知识库中未收录与\"{query}\"相关的内容，请尝试换个问法或上传相关文档。"
+    state["reasoning"] = None
+    state["sources"] = []
+    state["is_doc_grounded"] = False
+    state["doc_notice"] = "知识库中未收录相关内容"
+    state["confidence_mode"] = "fallback"
+    state["retrieval_confidence"] = 0.0
+    state["generation_confidence"] = 0.0
+    state["confidence"] = 0.0
+    logger.info(f"[Fallback] No relevant docs for query: '{query}'")
+    return state
+
+
 def generate_cot_answer_node(state: AgentState) -> AgentState:
     """
     生成智能体节点
@@ -260,13 +291,22 @@ def generate_cot_answer_node(state: AgentState) -> AgentState:
             doc.get("metadata", {}).get("section_path", doc.get("doc_name", ""))
             for doc in state["documents"]
         ]
-        
-        # 计算置信度
-        doc_count_factor = min(len(state["documents"]) / 3, 1.0)
-        base = 0.6
-        sufficiency_bonus = state["sufficiency_score"] * 0.2
-        doc_bonus = doc_count_factor * 0.2
-        state["confidence"] = min(base + sufficiency_bonus + doc_bonus, 1.0)
+
+        # 文档命中模式标记
+        state["is_doc_grounded"] = True
+        state["doc_notice"] = None
+        state["confidence_mode"] = "doc_grounded"
+
+        # Generation Confidence: 用 sufficiency 近似生成可信度，并考虑回答稳定性代理
+        suff = max(0.0, min(state.get("sufficiency_score", 0.0), 1.0))
+        answer_len_factor = 0.7 if len(state["answer"]) > 40 else 0.5
+        state["generation_confidence"] = max(0.0, min(0.7 * suff + 0.3 * answer_len_factor, 1.0))
+
+        # Final Confidence: 检索置信度 + 生成置信度加权
+        retrieval_conf = state.get("retrieval_confidence", 0.0)
+        state["confidence"] = max(0.0, min(0.55 * retrieval_conf + 0.45 * state["generation_confidence"], 0.98))
+        if retrieval_conf > 0.6 and state["confidence"] < 0.55:
+            state["confidence"] = 0.55
         
         logger.info(
             f"Answer generated: confidence={state['confidence']:.2f}, "

@@ -32,11 +32,16 @@ class AgentState(TypedDict):
     confidence: float
 
     # 检索评分路由
-    top_doc_score: float     # 检索到的最高文档分数，用于评分路由
-    skip_retrieval: bool     # 记忆命中时跳过检索直接生成
+    top_doc_score: float          # 检索到的最高文档分数
+    retrieval_confidence: float   # 检索阶段置信度
+    generation_confidence: float  # 生成阶段置信度
+    skip_retrieval: bool          # 记忆命中时跳过检索直接生成
+    is_doc_grounded: bool         # 是否来源于文档证据
+    doc_notice: Optional[str]     # 文档提示信息
+    confidence_mode: str          # doc_grounded | fallback
 
     # 对话历史
-    chat_history: str        # 格式化的历史文本，注入 Prompt 用
+    chat_history: str             # 格式化的历史文本，注入 Prompt 用
 
     # 元数据
     start_time: float

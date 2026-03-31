@@ -6,7 +6,8 @@ from agents.nodes import (
     retrieve_and_rerank_node,
     grade_evidence_node,
     rewrite_query_node,
-    generate_cot_answer_node
+    generate_cot_answer_node,
+    generate_fallback_answer_node
 )
 
 # 记忆命中关键词
@@ -18,8 +19,8 @@ _MEMORY_PATTERNS = [
     "接着", "然后呢", "还有呢", "那么"
 ]
 
-# 检索分数阈值：低于此值认为文档不相关，走记忆/历史生成
-SCORE_THRESHOLD = 0.3
+# 检索分数阈值：低于此值认为文档不相关，直接走 fallback 回答
+SCORE_THRESHOLD = 0.6
 
 
 def history_check_node(state: AgentState) -> AgentState:
@@ -54,30 +55,27 @@ def route_history_check(state: AgentState) -> Literal["use_history", "retrieve"]
     return "use_history" if state.get("skip_retrieval", False) else "retrieve"
 
 
-def route_after_retrieval(state: AgentState) -> Literal["grade", "use_history"]:
+def route_after_retrieval(state: AgentState) -> Literal["grade", "fallback"]:
     """
     第二层路由（检索后评分路由）
 
     逻辑：
     - 检索到文档且最高分 >= SCORE_THRESHOLD → 走 Grader 精细评估
-    - 分数低 / 无文档 → 有历史则走历史生成，否则走 Grader（让 LLM 尽力回答）
+    - 否则 → 直接 fallback 回答，不再进入多轮检索评分
     """
     top_score = state.get("top_doc_score", 0.0)
-    has_history = bool(state.get("chat_history", "").strip())
     has_docs = bool(state.get("documents"))
 
     if has_docs and top_score >= SCORE_THRESHOLD:
         logger.info(f"[Layer2] Score {top_score:.3f} >= {SCORE_THRESHOLD}, proceed to grade")
         return "grade"
-    else:
-        if has_history:
-            logger.info(f"[Layer2] Score {top_score:.3f} < {SCORE_THRESHOLD} + has history, use history")
-            # 清空低质量文档，避免干扰生成
-            state["documents"] = []
-            state["sufficiency_score"] = 1.0
-        else:
-            logger.info(f"[Layer2] Score {top_score:.3f} < {SCORE_THRESHOLD}, no history, fallback to grade")
-        return "grade"
+
+    logger.info(f"[Layer2] Score {top_score:.3f} < {SCORE_THRESHOLD}, direct fallback")
+    state["documents"] = []
+    state["document_scores"] = []
+    state["sufficiency_score"] = 0.0
+    state["is_sufficient"] = False
+    return "fallback"
 
 
 def create_agent_graph():
@@ -103,6 +101,7 @@ def create_agent_graph():
     workflow.add_node("grade", grade_evidence_node)
     workflow.add_node("rewrite", rewrite_query_node)
     workflow.add_node("generate", generate_cot_answer_node)
+    workflow.add_node("fallback_generate", generate_fallback_answer_node)
 
     workflow.set_entry_point("history_check")
 
@@ -122,13 +121,14 @@ def create_agent_graph():
         route_after_retrieval,
         {
             "grade": "grade",
-            "use_history": "generate"
+            "fallback": "fallback_generate"
         }
     )
 
     # 固定边
     workflow.add_edge("rewrite", "retrieve_rerank")
     workflow.add_edge("generate", END)
+    workflow.add_edge("fallback_generate", END)
 
     # Grader 路由
     workflow.add_conditional_edges(

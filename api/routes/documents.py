@@ -3,13 +3,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
 from loguru import logger
+from core.config import settings
 
 router = APIRouter(prefix="/v1", tags=["documents"])
 
-DOCS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    "data", "documents"
-)
+DOCS_DIR = settings.DOCUMENTS_DIR_RESOLVED
 
 _embedder = None
 
