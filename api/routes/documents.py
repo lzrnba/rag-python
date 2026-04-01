@@ -1,7 +1,7 @@
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional, Dict, Any
 from loguru import logger
 from core.config import settings
 
@@ -29,6 +29,11 @@ class DocumentListResponse(BaseModel):
     docs_dir: str
     files: List[dict]
     total: int
+
+
+class ChunkListResponse(BaseModel):
+    total: int
+    chunks: List[Dict[str, Any]]
 
 
 def load_documents_from_dir() -> List[dict]:
@@ -99,3 +104,47 @@ async def list_documents():
         if os.path.isfile(fpath) and fname.endswith(supported):
             files.append({"name": fname, "size": os.path.getsize(fpath), "path": fpath})
     return DocumentListResponse(docs_dir=DOCS_DIR, files=files, total=len(files))
+
+
+@router.get("/documents/chunks", response_model=ChunkListResponse)
+async def list_chunks(
+    filename: Optional[str] = Query(default=None, description="按文件名过滤，例如 Redeme.md"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=2000)
+):
+    """输出当前文档切分后的 chunk 列表（调试接口）"""
+    from agents.nodes import _retriever
+
+    if _retriever is None:
+        raise HTTPException(status_code=503, detail="Retriever not initialized")
+
+    chunks = _retriever.chunks or []
+    if filename:
+        chunks = [
+            c for c in chunks
+            if c.get("metadata", {}).get("filename") == filename
+            or c.get("doc_id", "").startswith(filename)
+        ]
+
+    total = len(chunks)
+    sliced = chunks[offset: offset + limit]
+
+    result: List[Dict[str, Any]] = []
+    for c in sliced:
+        meta = c.get("metadata", {})
+        result.append({
+            "doc_id": c.get("doc_id", ""),
+            "filename": meta.get("filename"),
+            "section_path": meta.get("section_path"),
+            "chunk_index": meta.get("chunk_index"),
+            "total_chunks": meta.get("total_chunks"),
+            "content": c.get("content", ""),
+            "content_preview": (c.get("content", "")[:180] + "...") if len(c.get("content", "")) > 180 else c.get("content", ""),
+            "final_score": c.get("final_score"),
+            "bm25_norm": c.get("bm25_norm"),
+            "vector_norm": c.get("vector_norm"),
+            "rerank_score": c.get("rerank_score"),
+            "neighbor_of": c.get("neighbor_of")
+        })
+
+    return ChunkListResponse(total=total, chunks=result)

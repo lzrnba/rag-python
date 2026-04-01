@@ -32,7 +32,8 @@ class AgentState(TypedDict):
     confidence: float
 
     # 检索评分路由
-    top_doc_score: float          # 检索到的最高文档分数
+    top_doc_score: float          # 当前轮检索到的最高文档分数
+    best_doc_score: float         # 多轮检索中的历史最高分（防止重写后分数塌陷）
     retrieval_confidence: float   # 检索阶段置信度
     generation_confidence: float  # 生成阶段置信度
     skip_retrieval: bool          # 记忆命中时跳过检索直接生成

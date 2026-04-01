@@ -32,7 +32,9 @@
       <div class="row">
         <input id="baseUrl" style="width:280px" value="http://localhost:8000" />
         <input id="userId" style="width:180px" value="user_demo" />
+        <input id="chunkFilename" style="width:180px" value="Redeme.md" placeholder="文件名过滤，如 Redeme.md" />
         <button id="checkDocsBtn" style="background:#22c55e;border-color:#22c55e">检查文档目录</button>
+        <button id="loadChunksBtn" style="background:#0ea5e9;border-color:#0ea5e9">加载 chunks</button>
         <button id="sendBtn">发送</button>
       </div>
       <div id="docsInfo" class="muted" style="margin-top:8px">docs_dir: 未检查</div>
@@ -71,17 +73,40 @@
         <tbody></tbody>
       </table>
     </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>文档 chunks（/v1/documents/chunks）</strong>
+        <span id="chunkMeta" class="muted">未加载</span>
+      </div>
+      <table id="chunksTable" style="margin-top:8px">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>doc_id</th>
+            <th>section_path</th>
+            <th>chunk</th>
+            <th>content_preview</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
     const sendBtn = $('sendBtn');
     const checkDocsBtn = $('checkDocsBtn');
+    const loadChunksBtn = $('loadChunksBtn');
+    const chunkFilenameEl = $('chunkFilename');
+    const chunkMetaEl = $('chunkMeta');
     const docsInfoEl = $('docsInfo');
     const answerEl = $('answer');
     const statusEl = $('status');
     const metaEl = $('meta');
     const tbody = $('docsTable').querySelector('tbody');
+    const chunkTbody = $('chunksTable').querySelector('tbody');
 
     function num(v) {
       if (v === null || v === undefined || Number.isNaN(Number(v))) return '-';
@@ -103,6 +128,21 @@
           <td>${(d.content_preview || '').replace(/</g, '&lt;')}</td>
         `;
         tbody.appendChild(tr);
+      });
+    }
+
+    function renderChunks(chunks = []) {
+      chunkTbody.innerHTML = '';
+      chunks.forEach((c, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${i + 1}</td>
+          <td>${c.doc_id || ''}<div class="muted">${c.filename || ''}</div></td>
+          <td>${c.section_path || ''}</td>
+          <td>${(c.chunk_index ?? '-')}/${(c.total_chunks ?? '-')}</td>
+          <td>${(c.content_preview || '').replace(/</g, '&lt;')}</td>
+        `;
+        chunkTbody.appendChild(tr);
       });
     }
 
@@ -162,14 +202,41 @@
       }
     }
 
+    async function loadChunks() {
+      const baseUrl = $('baseUrl').value.trim().replace(/\/$/, '');
+      const filename = (chunkFilenameEl.value || '').trim();
+      loadChunksBtn.disabled = true;
+      chunkMetaEl.textContent = '加载中...';
+      renderChunks([]);
+      try {
+        const url = new URL(`${baseUrl}/v1/documents/chunks`);
+        if (filename) url.searchParams.set('filename', filename);
+        url.searchParams.set('offset', '0');
+        url.searchParams.set('limit', '200');
+
+        const resp = await fetch(url.toString());
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const chunks = data.chunks || [];
+        renderChunks(chunks);
+        chunkMetaEl.textContent = `total=${data.total || 0}, shown=${chunks.length}`;
+      } catch (e) {
+        chunkMetaEl.textContent = `加载失败: ${e.message}`;
+      } finally {
+        loadChunksBtn.disabled = false;
+      }
+    }
+
     sendBtn.addEventListener('click', send);
     checkDocsBtn.addEventListener('click', checkDocs);
+    loadChunksBtn.addEventListener('click', loadChunks);
     $('query').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
     });
 
     // 页面加载后自动检查一次文档目录
     checkDocs();
+    loadChunks();
   </script>
 </body>
 </html>

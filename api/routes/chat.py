@@ -100,6 +100,8 @@ async def chat_stream(request: ChatRequest):
                 "chat_history": chat_history,
                 "skip_retrieval": False,
                 "top_doc_score": 0.0,
+                "best_doc_score": 0.0,
+                "best_doc_score": 0.0,
                 "retrieval_confidence": 0.0,
                 "generation_confidence": 0.0,
                 "is_doc_grounded": True,
@@ -128,10 +130,38 @@ async def chat_stream(request: ChatRequest):
             yield f"data: {json.dumps({'type': 'status', 'content': 'generating'}, ensure_ascii=False)}\n\n"
 
             # 流式生成答案
-            if _llm_client is None:
+            if _llm_client is None or (not result.get("is_doc_grounded", True)) or (not result.get("documents")):
                 # LLM 不可用，直接发送已有答案
                 answer = result.get("answer", "未找到相关信息")
                 yield f"data: {json.dumps({'type': 'token', 'content': answer}, ensure_ascii=False)}\n\n"
+
+                memory.add_turn(
+                    conversation_id=conversation_id,
+                    query=request.query,
+                    answer=answer
+                )
+
+                response_time_ms = int((time.time() - start_time) * 1000)
+                meta = {
+                    "type": "done",
+                    "conversation_id": conversation_id,
+                    "reasoning": result.get("reasoning"),
+                    "sources": result.get("sources", []),
+                    "retrieved_docs": _format_retrieved_docs(result.get("documents", [])),
+                    "confidence": result.get("confidence", 0.0),
+                    "is_doc_grounded": result.get("is_doc_grounded", True),
+                    "doc_notice": result.get("doc_notice"),
+                    "confidence_mode": result.get("confidence_mode", "doc_grounded"),
+                    "retrieval_process": {
+                        "iterations": result["iterations"],
+                        "sufficiency_score": result["sufficiency_score"],
+                        "total_documents_retrieved": len(result["documents"]),
+                        "retrieval_times": result["retrieval_times"]
+                    },
+                    "response_time_ms": response_time_ms
+                }
+                yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
+                return
             else:
                 # 重新构建 prompt 并流式输出
                 context = "\n\n".join([doc.get("content", "") for doc in result["documents"]])
