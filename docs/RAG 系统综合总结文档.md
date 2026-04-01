@@ -521,18 +521,18 @@ def generate_with_fallback(query, documents):
 
 ### Phase 2：检索增强与质量提升（✅ 已完成约 90%）
 
-| 能力                          | 状态    | 说明                                    |
-| :-------------------------- | :---- | :------------------------------------ |
-| FAISS 向量检索                  | ✅     | `retrieval/vector_store.py` 已实现并持久化   |
-| Embedding 接入（Ollama/bge-m3） | ✅     | `retrieval/embedder.py` 已支持批量向量化      |
-| 混合检索（向量 + BM25）             | ✅     | `retrieval/hybrid.py` 已实现加权融合         |
-| 中文分词优化（jieba）               | ✅     | BM25 查询分词已接入                          |
-| 文档解析（txt/md/pdf/docx）       | ✅     | `retrieval/loader.py` 已支持多格式          |
-| 结构化分块与邻接补偿                  | ✅     | 结构感知分块 + 邻接 chunk 扩展已上线               |
-| 文档重载重建索引                    | ✅     | `/v1/documents/reload` 可重建 BM25+FAISS |
-| 索引一致性（文档 hash）              | ✅     | 文档变更自动触发索引重建，避免旧索引污染                  |
+| 能力                          | 状态    | 说明                                                   |
+| :-------------------------- | :---- | :--------------------------------------------------- |
+| FAISS 向量检索                  | ✅     | `retrieval/vector_store.py` 已实现并持久化                  |
+| Embedding 接入（Ollama/bge-m3） | ✅     | `retrieval/embedder.py` 已支持批量向量化                     |
+| 混合检索（向量 + BM25）             | ✅     | `retrieval/hybrid.py` 已实现加权融合                        |
+| 中文分词优化（jieba）               | ✅     | BM25 查询分词已接入                                         |
+| 文档解析（txt/md/pdf/docx）       | ✅     | `retrieval/loader.py` 已支持多格式                         |
+| 结构化分块与邻接补偿                  | ✅     | 结构感知分块 + 邻接 chunk 扩展已上线                              |
+| 文档重载重建索引                    | ✅     | `/v1/documents/reload` 可重建 BM25+FAISS                |
+| 索引一致性（文档 hash）              | ✅     | 文档变更自动触发索引重建，避免旧索引污染                                 |
 | Cross-Encoder 重排            | ✅     | 已接入 `sentence-transformers` CrossEncoder，支持候选重排与降级回退 |
-| 术语词典与规则校验                   | ⏳ 未完成 | 尚未看到独立词典模块                            |
+| 术语词典与规则校验                   | ✅ 已补充 | 已在文档新增术语词典（核心 RAG 概念、检索链路与评估指标） |
 
 ### Phase 3：性能与稳定性（🟡 部分完成）
 
@@ -578,7 +578,27 @@ def generate_with_fallback(query, documents):
 
 ---
 
-## 十三、设计亮点
+## 十三、术语词典（Phase 2 补充）
+
+| 术语 | 英文/缩写 | 定义 | 在本项目中的作用 |
+|:--|:--|:--|:--|
+| 检索增强生成 | RAG | 先检索外部知识，再由模型生成回答的范式 | 降低幻觉、提升答案可追溯性 |
+| 状态图编排 | LangGraph | 以有向图形式组织 Agent 节点与路由 | 驱动 Retriever/Grader/Rewriter/Generator 闭环 |
+| 混合检索 | Hybrid Retrieval | 向量检索 + BM25 融合检索 | 同时兼顾语义召回与关键词精确匹配 |
+| 向量检索 | Vector Retrieval | 将 query/doc 编码后按向量相似度召回 | 提升语义相关问题的召回率 |
+| 稀疏检索 | BM25 | 基于词频与逆文档频率的传统检索算法 | 提升术语、字段、代码名等精确命中 |
+| 重排模型 | Cross-Encoder Reranker | 对候选文档做逐对打分重排 | 提升 Top-K 文档排序质量 |
+| 文档分块 | Chunking | 将长文档切成可检索粒度的片段 | 避免上下文超长，提升召回精度 |
+| 邻接补偿 | Neighbor Expansion | 命中 chunk 时补充相邻 chunk | 缓解边界截断造成的信息缺失 |
+| 证据充分性 | Sufficiency Score | Grader 对“文档是否足够回答问题”的评分 | 决定生成、重写还是继续检索 |
+| 查询重写 | Query Rewrite | 基于缺失信息重写 query | 在证据不足时提升下一轮检索命中 |
+| 兜底回答 | Fallback | 低相关场景直接返回“知识库未收录”提示 | 防止模型在无证据场景胡编 |
+| 文档置信模式 | doc_grounded / fallback | 区分是否基于文档证据生成 | 便于前端展示可信度与来源状态 |
+| SSE 流式输出 | Server-Sent Events | 服务端逐 token 推送前端 | 改善交互体验，降低首字延迟感知 |
+
+---
+
+## 十四、设计亮点
 
 1. **LangGraph 状态图**：完全支持闭环迭代、动态路由决策、状态变更可追踪
 2. **混合检索**：兼顾语义理解和精确匹配，加权融合策略可配置
@@ -588,7 +608,7 @@ def generate_with_fallback(query, documents):
 
 ---
 
-## 十四、快速开始
+## 十五、快速开始
 
 ### 1. 安装依赖
 ```bash
@@ -618,12 +638,12 @@ curl -X POST "http://localhost:8000/v1/chat/completions" \
 
 ---
 
-## 十五、总结
+## 十六、总结
 
 **Phase 2 核心检索增强能力已完成**，系统已经具备 FAISS 向量检索、中文分词优化、结构化分块与邻接补偿、Cross-Encoder 重排、文档重载重建索引等关键能力。
 
 **当前局限**：
-- 术语词典与规则校验尚未建设
+- 术语词典已补充，规则校验能力尚未建设
 - L1/L2 查询结果缓存体系尚未形成
 - 压测与并发优化缺少系统化基准数据
 - 用户反馈闭环与可视化知识库管理仍在规划中

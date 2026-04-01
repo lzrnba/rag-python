@@ -2,15 +2,104 @@ import time
 import json
 import re
 import math
+import threading
 from loguru import logger
 from agents.state import AgentState
 from retrieval.hybrid import HybridRetriever
 from llm.vllm_client import QwenClient
 from llm.prompts import GRADER_PROMPT, REWRITER_PROMPT, GENERATOR_PROMPT
+from core.config import settings
 
 # 全局检索器实例
 _retriever = None
 _llm_client = None
+
+# 术语词典缓存（支持 DB 热加载）
+_term_lock = threading.Lock()
+_term_cache: set[str] = {
+    "KYKMS", "RAG", "LangGraph", "BM25", "FAISS", "Cross-Encoder",
+    "Qwen", "Qwen2.5", "FastAPI", "Redis"
+}
+_last_term_load_ts: float = 0.0
+
+
+def _parse_postgres_dsn(url: str) -> str:
+    """支持将 jdbc:postgresql://... 转为 psycopg2 可用 DSN"""
+    if not url:
+        return ""
+    return url.replace("jdbc:", "", 1) if url.startswith("jdbc:") else url
+
+
+def _load_terms_from_db() -> set[str]:
+    if not settings.TERM_DB_ENABLED:
+        return set()
+
+    try:
+        import psycopg2
+    except Exception as e:
+        logger.warning(f"[TermDict] psycopg2 unavailable: {e}")
+        return set()
+
+    dsn = _parse_postgres_dsn(settings.TERM_DB_URL)
+    if not dsn:
+        logger.warning("[TermDict] TERM_DB_URL is empty")
+        return set()
+
+    sql = (
+        f"SELECT term FROM {settings.TERM_DB_TABLE} "
+        "WHERE is_active = TRUE ORDER BY priority DESC, term ASC"
+    )
+
+    try:
+        conn = psycopg2.connect(
+            dsn,
+            user=settings.TERM_DB_USER or None,
+            password=settings.TERM_DB_PASSWORD or None,
+            connect_timeout=3
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                terms = {str(r[0]).strip() for r in rows if r and r[0] and str(r[0]).strip()}
+                logger.info(f"[TermDict] Loaded {len(terms)} terms from PostgreSQL")
+                return terms
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"[TermDict] load failed, fallback to local cache: {e}")
+        return set()
+
+
+def _refresh_term_cache_if_needed() -> None:
+    global _last_term_load_ts, _term_cache
+
+    now = time.time()
+    ttl = max(10, int(settings.TERM_DICT_REFRESH_SECONDS))
+    if now - _last_term_load_ts < ttl:
+        return
+
+    with _term_lock:
+        now = time.time()
+        if now - _last_term_load_ts < ttl:
+            return
+
+        db_terms = _load_terms_from_db()
+        if db_terms:
+            _term_cache = db_terms
+        _last_term_load_ts = now
+
+
+def _find_terms(text: str) -> set[str]:
+    """从文本中提取命中的术语（大小写不敏感）"""
+    _refresh_term_cache_if_needed()
+
+    src = (text or "").lower()
+    hit = set()
+    for term in _term_cache:
+        if term.lower() in src:
+            hit.add(term)
+    return hit
 
 def set_retriever(retriever: HybridRetriever):
     """设置全局检索器"""
@@ -212,6 +301,14 @@ def rewrite_query_node(state: AgentState) -> AgentState:
 
         # 更新查询
         new_query = response.strip()
+
+        # 术语规则校验（最小可落地）：rewrite 不允许丢失原问题中的核心术语
+        original_terms = _find_terms(state.get("original_query", ""))
+        rewritten_terms = _find_terms(new_query)
+        missing_terms = [t for t in original_terms if t not in rewritten_terms]
+        if missing_terms:
+            new_query = f"{new_query} {' '.join(missing_terms)}".strip()
+            logger.info(f"[RuleCheck] Rewrite kept terms: {missing_terms}")
         state["prev_missing_info"] = state["missing_info"]
         state["query"] = new_query
 
